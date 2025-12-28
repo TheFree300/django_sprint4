@@ -18,12 +18,21 @@ from django.urls import path, include, reverse_lazy
 from django.views.generic.edit import CreateView
 from django.contrib.auth.forms import UserCreationForm
 from blog import views as blog_views
+from django.conf import settings
+from django.views.generic import RedirectView
+from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('blog.urls')),
     path('', include('pages.urls')),
+    path('accounts/login/', RedirectView.as_view(
+        url='/auth/login/',
+        permanent=False,
+        query_string=True  # сохраняет ?next= параметр
+    )),
+    path('accounts/profile/', blog_views.accounts_profile_fix),
     path(
-        'auth/registration/', 
+        'auth/registration/',
         CreateView.as_view(
             template_name='registration/registration_form.html',
             form_class=UserCreationForm,
@@ -33,8 +42,11 @@ urlpatterns = [
     ),
     path('auth/', include('django.contrib.auth.urls')),
     path('profile/edit/', blog_views.edit_profile, name='edit_profile'),
-    path('profile/<str:username>/', blog_views.user_profile, name='profile'),  
+    path('profile/<str:username>/', blog_views.user_profile, name='profile'),
 ]
-
-handler404 = 'blog.views.page_not_found'
-handler500 = 'blog.views.handler500'
+handler403 = 'pages.views.csrf_failure'
+handler404 = 'pages.views.page_not_found'
+handler500 = 'pages.views.server_error'
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL,
+                          document_root=settings.MEDIA_ROOT)

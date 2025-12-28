@@ -1,5 +1,5 @@
 from django.shortcuts import get_object_or_404, render, redirect
-from .models import Category, Post, Location
+from .models import Category, Post, Location, Comment
 from datetime import datetime
 from django.contrib.auth.models import User
 from django.contrib.auth.decorators import login_required
@@ -8,26 +8,111 @@ from django.contrib import messages
 from django.contrib.auth.forms import UserChangeForm
 from django import forms
 from django.utils import timezone
+from django.views.decorators.http import require_POST
+from django.db.models import Count
+
+
+@login_required
+def accounts_profile_fix(request):
+    return redirect('blog:index')
+
+
+class PostForm(forms.ModelForm):
+
+    class Meta:
+        model = Post
+        fields = ['title', 'text', 'pub_date', 'category',
+                  'location', 'image']
+
+        widgets = {
+            'title': forms.TextInput(attrs={
+                'class': 'form-control',
+                'placeholder': 'Введите заголовок'
+            }),
+            'text': forms.Textarea(attrs={
+                'class': 'form-control',
+                'rows': 10,
+                'placeholder': 'Введите текст публикации'
+            }),
+            'pub_date': forms.DateTimeInput(attrs={
+                'class': 'form-control',
+                'type': 'datetime-local',
+            }),
+            'category': forms.Select(attrs={'class': 'form-select'}),
+            'location': forms.Select(attrs={'class': 'form-select'}),
+            'image': forms.ClearableFileInput(attrs={'class': 'form-control'}),
+        }
+
+        labels = {
+            'title': 'Заголовок',
+            'text': 'Текст',
+            'pub_date': 'Дата и время публикации',
+            'category': 'Категория',
+            'location': 'Местоположение',
+            'image': 'Изображение',
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['category'].queryset = Category.objects.filter(
+            is_published=True
+        )
+        self.fields['location'].queryset = Location.objects.filter(
+            is_published=True
+        )
+        if not self.instance.pk:
+            self.fields['pub_date'].initial = timezone.now().strftime(
+                '%Y-%m-%dT%H:%M'
+            )
+
+    def clean_pub_date(self):
+        pub_date = self.cleaned_data.get('pub_date')
+        if pub_date and pub_date < timezone.now():
+
+            self.instance.is_published = True
+        return pub_date
+
+
+class CommentForm(forms.ModelForm):
+    class Meta:
+        model = Comment
+        fields = ['text']
+        widgets = {
+            'text': forms.Textarea(attrs={
+                'class': 'form-control',
+                'rows': 3,
+                'placeholder': 'Введите ваш комментарий...'
+            })
+        }
+        labels = {
+            'text': ''
+        }
 
 
 def user_profile(request, username):
-    # Получаем пользователя (в шаблоне он называется profile)
-    profile = get_object_or_404(User, username=username)
-    
-    # Получаем все публикации пользователя
-    posts_list = Post.objects.filter(author=profile).order_by('-pub_date')
-    
-    # Настраиваем пагинацию (6 постов на страницу)
-    paginator = Paginator(posts_list, 10)
+    profile_user = get_object_or_404(User, username=username)
+    user_posts = profile_user.post_set.all()
+    if request.user != profile_user:
+        user_posts = user_posts.filter(
+            is_published=True,
+            pub_date__lte=timezone.now(),
+            category__is_published=True
+        )
+
+    user_posts = user_posts.annotate(
+        comment_count=Count('comments')
+    ).order_by('-pub_date')
+
+    paginator = Paginator(user_posts, 10)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
-    
+
     context = {
-        'profile': profile, 
-        'page_obj': page_obj, 
+        'profile': profile_user,
+        'page_obj': page_obj,
     }
-    
     return render(request, 'blog/profile.html', context)
+
 
 @login_required
 def edit_profile(request):
@@ -39,98 +124,48 @@ def edit_profile(request):
             return redirect('profile', username=request.user.username)
     else:
         form = UserChangeForm(instance=request.user)
-    
+
     return render(request, 'blog/user.html', {'form': form})
+
 
 @login_required
 def create_post(request):
-    """Создание новой публикации"""
-    class PostForm(forms.ModelForm):
-        
-        class Meta:
-            model = Post
-            fields = ['title', 'text', 'pub_date', 'category', 'location', 'image']
-        
-            widgets = {
-                'title': forms.TextInput(attrs={
-                    'class': 'form-control',
-                    'placeholder': 'Введите заголовок'
-                }),
-                'text': forms.Textarea(attrs={
-                    'class': 'form-control',
-                    'rows': 10,
-                    'placeholder': 'Введите текст публикации'
-                }),
-                'pub_date': forms.DateTimeInput(attrs={
-                    'class': 'form-control',
-                    'type': 'datetime-local',
-                }),
-                'category': forms.Select(attrs={'class': 'form-select'}),
-                'location': forms.Select(attrs={'class': 'form-select'}),
-                'image': forms.ClearableFileInput(attrs={'class': 'form-control'}),
-            }
-        
-            labels = {
-                'title': 'Заголовок',
-                'text': 'Текст',
-                'pub_date': 'Дата и время публикации',
-                'category': 'Категория',
-                'location': 'Местоположение',
-                'image': 'Изображение',
-        }
-    
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-        # Показываем только опубликованные категории и местоположения
-            self.fields['category'].queryset = Category.objects.filter(is_published=True)
-            self.fields['location'].queryset = Location.objects.filter(is_published=True)
 
-        
-        # Устанавливаем текущее время по умолчанию
-            if not self.instance.pk:  # Только для создания нового поста
-                self.fields['pub_date'].initial = timezone.now().strftime('%Y-%m-%dT%H:%M')
-    
-        def clean_pub_date(self):
-            pub_date = self.cleaned_data.get('pub_date')
-            if pub_date and pub_date < timezone.now():
-            # Если дата в прошлом, сразу публикуем
-                self.instance.is_published = True
-            return pub_date
-    
     if request.method == 'POST':
         form = PostForm(request.POST, request.FILES)
         if form.is_valid():
             post = form.save(commit=False)
             post.author = request.user
-            
+
             # Определяем статус публикации
             if post.pub_date > timezone.now():
                 # Отложенная публикация
                 post.is_published = False
                 messages.success(
-                    request, 
-                    'Пост создан и будет опубликован ' + 
-                    post.pub_date.strftime('%d.%m.%Y в %H:%M')
+                    request,
+                    'Пост создан и будет опубликован '
+                    + post.pub_date.strftime('%d.%m.%Y в %H:%M')
                 )
             else:
                 # Немедленная публикация
                 post.is_published = True
                 messages.success(request, 'Пост успешно опубликован!')
-            
+
             post.save()
-            
+
             # Перенаправляем на страницу профиля пользователя
             return redirect('profile', username=request.user.username)
     else:
         form = PostForm()
-    
+
     context = {
         'form': form,
         'categories': Category.objects.filter(is_published=True),
         'locations': Location.objects.filter(is_published=True),
     }
-    
+
     return render(request, 'blog/create.html', context)
+
 
 def index(request):
     current_time = datetime.now()
@@ -138,7 +173,7 @@ def index(request):
         is_published=True,
         category__is_published=True,
         pub_date__lte=current_time
-    ).order_by('-pub_date')[:5]
+    ).annotate(comment_count=Count('comments')).order_by('-pub_date')
     paginator = Paginator(post_list, 10)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
@@ -150,47 +185,214 @@ def index(request):
 
 
 def post_detail(request, pk):
-    current_time = datetime.now()
-    post = get_object_or_404(
-        Post,
-        pk=pk,
-        is_published=True,
-        pub_date__lte=current_time,
-        category__is_published=True
-    )
+
+    post_queryset = Post.objects.filter(pk=pk)
+
+    # Если пользователь не автор, добавляем фильтры
+    if not (request.user.is_authenticated
+            and post_queryset.filter(author=request.user).exists()):
+        post_queryset = post_queryset.filter(
+            is_published=True,
+            category__is_published=True,
+            pub_date__lte=timezone.now()
+        )
+
+    # Получаем пост или 404
+    post = get_object_or_404(post_queryset)
+
+    # Остальной код...
+    comments = post.comments.order_by('created_at')
+    form = CommentForm()
+
     context = {
-        'post': post
+        'post': post,
+        'comments': comments,
+        'form': form,
+        'is_author': request.user == post.author,
     }
     return render(request, 'blog/detail.html', context)
 
 
 def category_posts(request, category_slug):
-    current_time = datetime.now()
     category = get_object_or_404(
         Category,
         slug=category_slug,
         is_published=True
     )
-    post_list = Post.objects.select_related('author', 'location').filter(
-        category=category,
+
+    post_list = category.post_set.filter(
         is_published=True,
-        pub_date__lte=current_time
+        pub_date__lte=timezone.now()
+    ).select_related('author', 'location').annotate(
+        comment_count=Count('comments')  # Добавляем аннотацию
     ).order_by('-pub_date')
+
     paginator = Paginator(post_list, 10)
     page_number = request.GET.get('page')
     page_obj = paginator.get_page(page_number)
+
     context = {
-        'page_obj': page_obj,
         'category': category,
-        'post_list': post_list
+        'page_obj': page_obj
     }
     return render(request, 'blog/category.html', context)
+
+
+@login_required
+def edit_post(request, pk):
+    """
+    Редактирование поста авторизованным пользователем.
+    Только автор поста может редактировать.
+    """
+    post = get_object_or_404(Post, pk=pk)
+
+    if request.user != post.author:
+        messages.error(request, 'Вы можете редактировать только свои посты.')
+        return redirect('blog:post_detail', pk=post.pk)
+
+    if request.method == 'POST':
+        form = PostForm(
+            request.POST,
+            request.FILES or None,
+            instance=post
+        )
+
+        if form.is_valid():
+            post = form.save(commit=False)
+            post.author = request.user
+            if post.is_published and not post.pub_date:
+                post.pub_date = timezone.now()
+
+            if post.pub_date and post.pub_date > timezone.now():
+                post.is_published = False
+            post.save()
+
+            messages.success(request, 'Пост успешно обновлен!')
+            return redirect('blog:post_detail', pk=post.pk)
+        else:
+            messages.error(request, 'Пожалуйста, исправьте ошибки в форме.')
+    else:
+        form = PostForm(instance=post)
+
+    context = {
+        'form': form,
+        'post': post,
+        'title': f'Редактирование: {post.title}'
+    }
+    return render(request, 'blog/create.html', context)
+
+
+@login_required
+def delete_post(request, pk):
+    """Удаление поста"""
+    post = get_object_or_404(Post, pk=pk)
+
+    # Проверяем, что пользователь - автор поста
+    if request.user != post.author:
+        messages.error(request, 'Вы можете удалять только свои посты.')
+        return redirect('blog:post_detail', pk=post.pk)
+
+    if request.method == 'POST':
+        print("POST запрос получен!")  # для отладки
+        post.delete()
+        print("Пост удален!")  # для отладки
+        messages.success(request, 'Пост успешно удален!')
+        return redirect('blog:index')
+    else:
+        print("GET запрос")  # для отладки
+
+    # Используем PostForm с instance поста
+
+    # Создаем форму с экземпляром поста
+    form = PostForm(instance=post)
+
+    context = {
+        'form': form,
+    }
+    return render(request, 'blog/create.html', context)
+
+
+@login_required
+@require_POST
+def add_comment(request, pk):
+    """Добавление комментария (только POST)"""
+    post = get_object_or_404(Post, pk=pk)
+    form = CommentForm(request.POST)
+
+    if form.is_valid():
+        comment = form.save(commit=False)
+        comment.post = post
+        comment.author = request.user
+        comment.save()
+        messages.success(request, 'Комментарий успешно добавлен!')
+    else:
+        messages.error(request, 'Ошибка при добавлении комментария.')
+
+    return redirect('blog:post_detail', pk=post.pk)
+
+
+@login_required
+def edit_comment(request, post_id, comment_id):
+    """Редактирование комментария"""
+    comment = get_object_or_404(
+        Comment,
+        pk=comment_id,
+        post_id=post_id
+    )
+
+    # Проверяем, что пользователь - автор комментария
+    if request.user != comment.author:
+        messages.error(request,
+                       'Вы можете редактировать только свои комментарии.'
+                       )
+        return redirect('blog:post_detail', pk=post_id)
+
+    if request.method == 'POST':
+        form = CommentForm(request.POST, instance=comment)
+        if form.is_valid():
+            form.save()
+            messages.success(request, 'Комментарий успешно отредактирован!')
+            return redirect('blog:post_detail', pk=post_id)
+    else:
+        form = CommentForm(instance=comment)
+
+    context = {
+        'form': form,
+        'comment': comment,
+        'post': comment.post
+    }
+    return render(request, 'blog/comment.html', context)
+
+
+@login_required
+def delete_comment(request, post_id, comment_id):
+    """Удаление комментария"""
+    comment = get_object_or_404(
+        Comment,
+        pk=comment_id,
+        post_id=post_id,
+        author=request.user  # только автор может удалить
+    )
+
+    if request.method == 'POST':
+        comment.delete()
+        messages.success(request, 'Комментарий успешно удален!')
+        return redirect('blog:post_detail', pk=post_id)
+
+    context = {
+        'comment': comment,
+        'post': comment.post
+    }
+    return render(request, 'blog/comment.html', context)
+
 
 def page_not_found(request, exception):
     return render(request, 'pages/404.html', status=404)
 
+
 def csrf_failure(request, reason=''):
     return render(request, 'pages/403csrf.html', status=403)
+
 
 def handler500(request):
     return render(request, 'pages/500.html', status=500)

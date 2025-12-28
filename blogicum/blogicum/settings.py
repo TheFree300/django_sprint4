@@ -71,8 +71,9 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'blogicum.wsgi.application'
-
-
+TEMPLATES_DIR = BASE_DIR / 'templates'
+EMAIL_BACKEND = 'django.core.mail.backends.filebased.EmailBackend'
+EMAIL_FILE_PATH = BASE_DIR / 'sent_emails'
 # Database
 # https://docs.djangoproject.com/en/3.2/ref/settings/#databases
 
