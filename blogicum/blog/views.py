@@ -3,91 +3,32 @@ from .models import Category, Post, Location, Comment
 from datetime import datetime
 from django.contrib.auth.models import User
 from django.contrib.auth.decorators import login_required
-from django.core.paginator import Paginator
+from django.core.paginator import Paginator, PageNotAnInteger, EmptyPage
 from django.contrib import messages
 from django.contrib.auth.forms import UserChangeForm
 from django import forms
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.db.models import Count
-
+from .forms import PostForm, CommentForm
 
 @login_required
 def accounts_profile_fix(request):
     return redirect('blog:index')
 
-
-class PostForm(forms.ModelForm):
-
-    class Meta:
-        model = Post
-        fields = ['title', 'text', 'pub_date', 'category',
-                  'location', 'image']
-
-        widgets = {
-            'title': forms.TextInput(attrs={
-                'class': 'form-control',
-                'placeholder': 'Введите заголовок'
-            }),
-            'text': forms.Textarea(attrs={
-                'class': 'form-control',
-                'rows': 10,
-                'placeholder': 'Введите текст публикации'
-            }),
-            'pub_date': forms.DateTimeInput(attrs={
-                'class': 'form-control',
-                'type': 'datetime-local',
-            }),
-            'category': forms.Select(attrs={'class': 'form-select'}),
-            'location': forms.Select(attrs={'class': 'form-select'}),
-            'image': forms.ClearableFileInput(attrs={'class': 'form-control'}),
-        }
-
-        labels = {
-            'title': 'Заголовок',
-            'text': 'Текст',
-            'pub_date': 'Дата и время публикации',
-            'category': 'Категория',
-            'location': 'Местоположение',
-            'image': 'Изображение',
-        }
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['category'].queryset = Category.objects.filter(
-            is_published=True
-        )
-        self.fields['location'].queryset = Location.objects.filter(
-            is_published=True
-        )
-        if not self.instance.pk:
-            self.fields['pub_date'].initial = timezone.now().strftime(
-                '%Y-%m-%dT%H:%M'
-            )
-
-    def clean_pub_date(self):
-        pub_date = self.cleaned_data.get('pub_date')
-        if pub_date and pub_date < timezone.now():
-
-            self.instance.is_published = True
-        return pub_date
-
-
-class CommentForm(forms.ModelForm):
-    class Meta:
-        model = Comment
-        fields = ['text']
-        widgets = {
-            'text': forms.Textarea(attrs={
-                'class': 'form-control',
-                'rows': 3,
-                'placeholder': 'Введите ваш комментарий...'
-            })
-        }
-        labels = {
-            'text': ''
-        }
-
+def get_page_obj(request, queryset, per_page=10):
+    """Функция для создания page_obj"""
+    paginator = Paginator(queryset, per_page)
+    page_number = request.GET.get('page')
+    
+    try:
+        page_obj = paginator.page(page_number)
+    except PageNotAnInteger:
+        page_obj = paginator.page(1)
+    except EmptyPage:
+        page_obj = paginator.page(paginator.num_pages)
+    
+    return page_obj
 
 def user_profile(request, username):
     profile_user = get_object_or_404(User, username=username)
